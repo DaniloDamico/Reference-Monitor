@@ -8,6 +8,7 @@
 #include <linux/slab.h>
 #include <linux/string.h>
 #include <linux/uio.h>
+#include <linux/version.h>
 
 #include "logfilefs.h"
 
@@ -166,7 +167,7 @@ struct dentry *logfilefs_lookup(struct inode *parent_inode, struct dentry *child
         if(!(the_inode->i_state & I_NEW)) return child_dentry;
 
         //this work is done if the inode was not already cached
-        #if defined(nop_mnt_idmap) // nop_mnt_idmap introduced in kernel 6.2
+        #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 2, 0) // nop_mnt_idmap introduced in kernel 6.2
             inode_init_owner(&nop_mnt_idmap, the_inode, NULL, S_IFREG);
         #else
             inode_init_owner(sb->s_user_ns, the_inode, NULL, S_IFREG);

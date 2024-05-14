@@ -8,6 +8,7 @@
 #include <linux/slab.h>
 #include <linux/string.h>
 #include <linux/mnt_idmapping.h>
+#include <linux/version.h>
 
 #include "logfilefs.h"
 
@@ -49,10 +50,10 @@ int logfilefs_fill_super(struct super_block *sb, void *data, int silent) {
     root_inode = iget_locked(sb, LOGFILEFS_ROOT_INODE_NUMBER);//get a root inode from cache
     if (!root_inode) return -ENOMEM;
 
-    #if defined(nop_mnt_idmap)
-        inode_init_owner(&nop_mnt_idmap, root_inode, NULL, S_IFDIR);
+    #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 2, 0) // nop_mnt_idmap introduced in kernel 6.2
+        inode_init_owner(&nop_mnt_idmap, root_inode, NULL, S_IFREG);
     #else
-        inode_init_owner(sb->s_user_ns, root_inode, NULL, S_IFDIR);
+        inode_init_owner(sb->s_user_ns, root_inode, NULL, S_IFREG);
     #endif
 
     root_inode->i_sb = sb;

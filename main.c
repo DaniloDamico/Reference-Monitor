@@ -482,7 +482,6 @@ static void deferred_work_function(struct work_struct *work){
 	if (IS_ERR(tfm)) goto defer_out;
 
 	struct sdesc *sdesc;
-    int ret;
 
     sdesc = init_sdesc(tfm);
     if (IS_ERR(sdesc)) goto defer_out;
