@@ -55,6 +55,9 @@ MODULE_LICENSE("GPL");
 #define CONFIG_FILE "rm_config"
 #define CONFIG_PATH "/proc/rm_config"
 
+#define PROTECTED_LIST_FILE "rm_protected"
+#define PROTECTED_LIST_PATH "/proc/rm_protected"
+
 #define CHANGEPASSW "changepassw"
 #define SETSTATE "setstate"
 #define ADDPATH "addpath"
@@ -65,13 +68,19 @@ DEFINE_MUTEX(lock);
 DEFINE_MUTEX(probe_lock);
 int rmmod_lock = 1;
 
-// how many times openat has been called since the module was mounted
-unsigned long audit_counter = 0;
-module_param(audit_counter, ulong, S_IRUSR | S_IRGRP | S_IROTH);
-
 static char *logfs_directory = NULL;
 module_param(logfs_directory, charp, S_IRUGO);
 
+enum RM_State {
+    OFF,
+    ON,
+    REC_OFF, // in reconfigurable mode it is possible to add or remove protected paths
+    REC_ON
+};
+
+enum RM_State current_state = OFF;
+static char *state_char = "OFF";
+module_param(state_char, charp, S_IRUGO);
 
 struct path_node {
     char *path;
@@ -144,26 +153,17 @@ u8 *password_data = NULL;
 u8 iv[16];  /* AES-256-XTS takes a 16-byte IV */
 u8 key[64]; /* AES-256-XTS takes a 64-byte key */
 
-enum RM_State {
-    OFF,
-    ON,
-    REC_OFF, // in reconfigurable mode it is possible to add or remove protected paths
-    REC_ON
-};
 
-enum RM_State current_state = ON;
 
-typedef struct _cfg_file{
-	ssize_t valid;
-	char file_data[SIZE];
-} cfg_file;
-
-cfg_file f;
-
-ssize_t write_proc(struct file *filp, const char *buf, size_t count, loff_t *offp );
+ssize_t write_proc(struct file *filp, const char *buf, size_t count, loff_t *offp);
+ssize_t read_protected(struct file *filp, char *buf, size_t count, loff_t *offp);
 
 struct proc_ops proc_fops = {
-        proc_write: write_proc
+        .proc_write = write_proc
+};
+
+struct proc_ops protected_fops = {
+        .proc_read = read_protected
 };
 
 /* tie all data structures together */
@@ -294,12 +294,11 @@ ssize_t write_proc(struct file *filp, const char *buf, size_t count, loff_t *off
 
 	int ret = 0;
 	int euid = current_euid().val;
+	char file_data[SIZE] = {0};
 	if(euid!=0){
 		printk("%s: set euid to 0 to send commands to the reference monitor\n", MODNAME);
 		return 1; // bad euid
 	}
-
-	mutex_lock(&lock);
 
 	if (buf == NULL || count <= 0 || !access_ok(buf, count)) {
 		printk("%s: error acquiring command\n", MODNAME);
@@ -307,15 +306,14 @@ ssize_t write_proc(struct file *filp, const char *buf, size_t count, loff_t *off
 		return 2; // error acquiring command
 	}
 
-	memset(f.file_data, 0, SIZE);
-	ret = copy_from_user(f.file_data,buf,count);
+	ret = copy_from_user(file_data,buf,count);
 	if(ret !=0){
 		printk("%s: error acquiring command\n", MODNAME);
 		mutex_unlock(&lock);
 		return 2; // error acquiring command
 	}
 
-	char *data_pointer = f.file_data;
+	char *data_pointer = file_data;
 	
 	char *first_word = NULL; // password
     first_word = strsep(&data_pointer, " ");
@@ -336,6 +334,8 @@ ssize_t write_proc(struct file *filp, const char *buf, size_t count, loff_t *off
 		printk("%s: badly formatted input. Try: password command \"parameter\"\n", MODNAME);
 		return 2; // error acquiring command
 	}
+
+	mutex_lock(&lock);
 
 	if (check_password(first_word)!=1) {
 		printk("%s: Wrong password.\n", MODNAME);
@@ -363,12 +363,16 @@ ssize_t write_proc(struct file *filp, const char *buf, size_t count, loff_t *off
 		// parse new state
 		if (strcmp(third_word, "OFF") == 0) {
 			current_state = OFF;
+			state_char = "OFF";
 		} else if (strcmp(third_word, "ON") == 0) {
 			current_state = ON;
+			state_char = "ON";
 		} else if (strcmp(third_word, "REC_OFF") == 0) {
 			current_state = REC_OFF;
+			state_char = "REC_OFF";
 		} else if (strcmp(third_word, "REC_ON") == 0) {
 			current_state = REC_ON;
+			state_char = "REC_ON";
 		} else{
 			printk("%s: invalid state\n", MODNAME);
 			mutex_unlock(&probe_lock);
@@ -433,6 +437,55 @@ end_write:
 
 	mutex_unlock(&lock);
 	return ret;
+}
+
+ssize_t read_protected(struct file *filp, char *buf, size_t count, loff_t *offp ) {
+
+	if(head==NULL) return 0;
+
+	struct path_node *curr = head;
+	char *kbuf;
+    ssize_t len = 0; // file size
+    size_t offset = 0;
+	int ret;
+
+
+	mutex_lock(&probe_lock);
+	
+	// Calculate the total length of the data
+    while (curr) {
+        len += strlen(curr->path) + 1; // +1 for newline
+        curr = curr->next;
+    }
+
+	if(*offp > len) {
+		mutex_unlock(&lock);
+		return 0;
+	}
+
+	if(count > (len - *offp)) {
+		count = len - *offp;
+	}
+
+	kbuf = kmalloc(len, GFP_KERNEL);
+    if (!kbuf) {
+		mutex_unlock(&probe_lock);
+        return -ENOMEM;
+    }
+
+	curr = head;
+    while (curr) {
+        offset += snprintf(kbuf + offset, len - offset, "%s\n", curr->path);
+        curr = curr->next;
+    }
+
+	ret = copy_to_user(buf,kbuf, count);
+	*offp += (count - ret);
+
+	mutex_unlock(&probe_lock);
+	kfree(kbuf);
+
+	return count-ret;
 }
 
 struct deferred_work_data {
@@ -565,11 +618,6 @@ defer_out:
 	
 }
 
-static int the_pre_hook(struct kprobe *ri, struct pt_regs *the_regs) {
-	atomic_inc((atomic_t*)&audit_counter);
-	return 0;
-}
-
 static int the_hook(struct kretprobe_instance *ri, struct pt_regs *the_regs) { 
 
 	int fd = regs_return_value(the_regs);
@@ -664,12 +712,11 @@ int  init_module(void) {
 	get_random_bytes(iv, sizeof(iv));
 	encrypt_password("passw", strlen("passw")); // set default password
 
-	f.valid = 0;
-	proc_create_data(CONFIG_FILE,0,NULL,&proc_fops,&f);
+	proc_create_data(CONFIG_FILE,0,NULL,&proc_fops,NULL);
+	proc_create_data(PROTECTED_LIST_FILE,0,NULL,&protected_fops,NULL);
 
 	retprobe.kp.symbol_name = target_func;
 	retprobe.handler = (kretprobe_handler_t)the_hook;
-	retprobe.entry_handler = (kretprobe_handler_t)the_pre_hook;
 	retprobe.maxactive = -1;
 
 	ret = register_kretprobe(&retprobe);
@@ -697,12 +744,10 @@ int  init_module(void) {
 	return ret;
 }
 
-
 void cleanup_module(void){
 	flush_scheduled_work();
 	unregister_kretprobe(&retprobe);
 
-	printk("%s: module invoked %lu times\n",MODNAME,audit_counter);
 	printk("%s: module unloaded\n",MODNAME);
 
 	int ret = unregister_filesystem(&logfilefs_type);
@@ -711,6 +756,7 @@ void cleanup_module(void){
     else printk("%s: failed to unregister singlefilefs driver - error %d", MODNAME, ret);
 
 	remove_proc_entry(CONFIG_FILE,NULL);
+	remove_proc_entry(PROTECTED_LIST_FILE,NULL);
 	kfree(password_data);
 	free_all_paths();
 }

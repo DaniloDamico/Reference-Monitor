@@ -1,5 +1,5 @@
-IMAGE_PATH := $(shell sed -n -e "s/^\#define IMAGE_NAME *\(.*\)/\1/p" $(PWD)/logfilefs/logfilefs.h)
-MOUNT_PATH := $(shell sed -n -e "s/^\#define MOUNT_PATH *\(.*\)/\1/p" $(PWD)/logfilefs/logfilefs.h)
+IMAGE_PATH := $(shell pwd)/image
+MOUNT_PATH := $(shell pwd)/mountfs/
 
 obj-m += reference_monitor.o
 reference_monitor-objs += main.o logfilefs/dir.o logfilefs/file.o logfilefs/logfilefs.o

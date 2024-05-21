@@ -102,53 +102,6 @@ ssize_t logfilefs_append(struct file * filp, const char * buf, size_t len, loff_
     return len - ret;
 }
 
-ssize_t logfilefs_append_iter(struct kiocb *the_kiocb, struct iov_iter *the_iov_iter) { // unused
-    loff_t *off = NULL;
-    struct buffer_head *bh = NULL;
-    struct inode * the_inode = the_kiocb->ki_filp->f_inode;
-    uint64_t file_size = the_inode->i_size;
-    *off = (loff_t)file_size;
-    int ret;
-    loff_t offset;
-    int block_to_write;//index of the block to write on device
-
-    size_t len = the_iov_iter->count;
-    printk("%s: kernel write operation called with len %ld (the current file size is %lld)", SUBMODULE, len, file_size);
-
-
-    //check that *off is within boundaries
-    if (file_size + len > IMAGE_DATA_SIZE)
-        len = IMAGE_DATA_SIZE - file_size;
-
-    //determine the block level offset for the operation
-    offset = *off % DEFAULT_BLOCK_SIZE; 
-    //just write stuff in a single block - residuals will be managed at the applicatin level
-    if (offset + len > DEFAULT_BLOCK_SIZE)
-        len = DEFAULT_BLOCK_SIZE - offset;
-
-    //compute the actual index of the the block to be read from device
-    block_to_write = *off / DEFAULT_BLOCK_SIZE + 2; //the value 2 accounts for superblock and file-inode on device
-    
-    printk("%s: write operation must access block %d of the device",SUBMODULE, block_to_write);
-
-    bh = (struct buffer_head *)sb_bread(the_kiocb->ki_filp->f_path.dentry->d_inode->i_sb, block_to_write);
-    if(!bh) return -EIO;
-
-    ret = copy_from_iter(bh->b_data + offset, len, the_iov_iter);
-    *off += (len - ret);
-
-    printk("prima %lld", the_kiocb->ki_filp->f_inode->i_size);
-    printk("ret %d e file_size %lld", ret, file_size);
-    the_kiocb->ki_filp->f_inode->i_size += (len - ret); // update file size
-    printk("dopo %lld", the_kiocb->ki_filp->f_inode->i_size);
-
-    brelse(bh);
-
-    return len - ret;
-}
-
-
-
 struct dentry *logfilefs_lookup(struct inode *parent_inode, struct dentry *child_dentry, unsigned int flags) {
 
     struct logfilefs_inode *FS_specific_inode;
@@ -210,5 +163,4 @@ const struct file_operations logfilefs_file_operations = {
     .owner = THIS_MODULE,
     .read = logfilefs_read,
     .write = logfilefs_append,
-    //.write_iter = logfilefs_append_iter,
 };

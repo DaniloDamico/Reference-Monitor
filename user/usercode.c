@@ -3,6 +3,30 @@
 #include <unistd.h>
 #include <string.h>
 
+#define STATE_FILE "/sys/module/reference_monitor/parameters/state_char"
+#define CURRSTATE "currstate"
+#define LISTPROTECTED "listprotected"
+#define LISTPROTECTED_FILE "/proc/rm_protected"
+
+void print_file(char* filepath){
+    FILE *file = fopen(filepath, "r");
+    if (file == NULL) {
+        perror("Can't find resource");
+        return;
+    }
+
+    char ch;
+    while ((ch = fgetc(file)) != EOF) {
+        putchar(ch);
+    }
+
+    if (ferror(file)) {
+        perror("Error reading resource");
+    }
+
+    fclose(file);
+}
+
 int main() {
     char userInput[500] = {0};
     int fd;
@@ -21,18 +45,31 @@ int main() {
     printf("\tpassw addpath \"/absolute/path\"\n");
     printf("\tpassw removepath \"/absolute/path\"\n");
     printf("\tpassw uninstall\n");
+    printf("\tcurrstate\n");
+    printf("\tlistprotected\n");
     
     printf("You can only add or remove paths in REC_OFF or REC_ON state.\n");
-    printf("You can add or remove directories but be watch they end in \"/\".\n");
+    printf("You can add or remove directories but be sure they end in \"/\".\n");
     printf("Uninstall removes the reference count the module calls to prevent rmmod from working.\n");
     printf("\n");
     
     while(1){
-        printf("Enter your input: ");
+        printf("> ");
         if(!fgets(userInput, sizeof(userInput), stdin)) continue;
 
         if(userInput[0]=='\n') continue;
-        userInput[strlen(userInput)-1] = '\0'; // replace newline with terminator
+        userInput[strlen(userInput)-1] = '\0'; // replaces newline with terminator
+
+        if (strcmp(userInput, CURRSTATE) == 0) {
+            print_file(STATE_FILE);
+            continue;
+        }
+                
+        if (strcmp(userInput, LISTPROTECTED) == 0) {
+            print_file(LISTPROTECTED_FILE);
+            printf("\n");
+            continue;
+        }
 
         fd = open("/proc/rm_config", O_WRONLY);
         if (fd <= 0) {
