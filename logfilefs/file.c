@@ -14,8 +14,11 @@
 
 MODULE_LICENSE("GPL");
 
+DEFINE_MUTEX(loglock);
+
 ssize_t logfilefs_read(struct file * filp, char __user * buf, size_t len, loff_t * off) {
 
+    mutex_lock(&loglock);
     struct buffer_head *bh = NULL;
     struct inode * the_inode = filp->f_inode;
     uint64_t file_size = the_inode->i_size;
@@ -25,13 +28,11 @@ ssize_t logfilefs_read(struct file * filp, char __user * buf, size_t len, loff_t
 
     printk("%s: read operation called with len %ld - and offset %lld (the current file size is %lld)", SUBMODULE, len, *off, file_size);
 
-    //this operation is not synchronized 
-    //*off can be changed concurrently 
-    //add synchronization if you need it for any reason
-
     //check that *off is within boundaries
-    if (*off >= file_size)
+    if (*off >= file_size){
+        mutex_unlock(&loglock);
         return 0;
+    }
     else if (*off + len > file_size)
         len = file_size - *off;
 
@@ -47,8 +48,14 @@ ssize_t logfilefs_read(struct file * filp, char __user * buf, size_t len, loff_t
     //printk("%s: read operation must access block %d of the device",SUBMODULE, block_to_read);
 
     bh = (struct buffer_head *)sb_bread(filp->f_path.dentry->d_inode->i_sb, block_to_read);
-    if(!bh) return -EIO;
+    
+    if(!bh){
+        mutex_unlock(&loglock);
+        return -EIO;
+    }
+
     ret = copy_to_user(buf,bh->b_data + offset, len);
+    mutex_unlock(&loglock);
     *off += (len - ret);
     brelse(bh);
 
@@ -58,6 +65,7 @@ ssize_t logfilefs_read(struct file * filp, char __user * buf, size_t len, loff_t
 
 ssize_t logfilefs_append(struct file * filp, const char * buf, size_t len, loff_t * off) {
 
+    mutex_lock(&loglock);
     struct buffer_head *bh = NULL;
     struct inode * the_inode = filp->f_inode;
     uint64_t file_size = the_inode->i_size;
@@ -85,7 +93,10 @@ ssize_t logfilefs_append(struct file * filp, const char * buf, size_t len, loff_
     //printk("%s: write operation must access block %d of the device",SUBMODULE, block_to_write);
 
     bh = (struct buffer_head *)sb_bread(filp->f_path.dentry->d_inode->i_sb, block_to_write);
-    if(!bh) return -EIO;
+    if(!bh){
+        mutex_unlock(&loglock);
+        return -EIO;
+    } 
     ret = copy_from_user(bh->b_data + offset, buf, len);
 
     if(ret==len){ // trying to write a kernel buffer
@@ -96,6 +107,7 @@ ssize_t logfilefs_append(struct file * filp, const char * buf, size_t len, loff_
     *off += (len - ret);
 
     filp->f_inode->i_size += (len - ret); // update file size
+    mutex_unlock(&loglock);
 
     brelse(bh);
 
