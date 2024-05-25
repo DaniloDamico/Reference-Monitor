@@ -26,7 +26,7 @@ ssize_t logfilefs_read(struct file * filp, char __user * buf, size_t len, loff_t
     loff_t offset;
     int block_to_read;//index of the block to be read from device
 
-    printk("%s: read operation called with len %ld - and offset %lld (the current file size is %lld)", SUBMODULE, len, *off, file_size);
+    //printk("%s: read operation called with len %ld - and offset %lld (the current file size is %lld)", SUBMODULE, len, *off, file_size);
 
     //check that *off is within boundaries
     if (*off >= file_size){

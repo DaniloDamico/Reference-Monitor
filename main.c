@@ -39,13 +39,11 @@ The code has been further modified for compatibility and tested on an Ubuntu VM 
 
 */
 
-
 MODULE_AUTHOR("Danilo D'Amico");
 MODULE_DESCRIPTION("A reconfigurable, password-protected reference monitor that prevents write-opens on the files and directories it monitors");
 MODULE_LICENSE("GPL");
 
 #define MODNAME "Reference Monitor"
-#define target_func "__x64_sys_openat" // (ver 4.17 introduced syscall wrappers)
 
 #define DIVIDER ", " 
 #define SHA256_LENGTH 32 // 256 bit
@@ -63,6 +61,12 @@ MODULE_LICENSE("GPL");
 #define ADDPATH "addpath"
 #define REMOVEPATH "removepath"
 #define UNINSTALL "uninstall"
+
+static unsigned long openat_audit_counter = 0;
+static unsigned long unlinkat_audit_counter = 0;
+static unsigned long mkdirat_audit_counter = 0;
+static unsigned long rmdir_audit_counter = 0;
+static unsigned long rename_audit_counter = 0;
 
 DEFINE_MUTEX(lock);
 DEFINE_MUTEX(probe_lock);
@@ -499,8 +503,6 @@ struct deferred_work_data {
     char hash[SHA256_LENGTH]; // {deferred work} sha256 of caller file
 };
 
-struct deferred_work_data *deferred_data;
-
 struct sdesc {
     struct shash_desc shash;
     char ctx[];
@@ -526,7 +528,6 @@ static void deferred_work_function(struct work_struct *work){
 				
 	struct file *caller_filp = filp_open(data->caller_path, O_RDONLY, 0);
 	if(caller_filp == NULL) goto defer_out;
-
 
 	char *buffer = kzalloc(PAGE_SIZE, GFP_KERNEL);
 	if (!buffer) goto defer_out;
@@ -555,12 +556,10 @@ static void deferred_work_function(struct work_struct *work){
         printk("%s: memory allocation failed.\n", MODNAME);
 		kfree(result);
         goto defer_out;
-    }
-	
+    }	
 
     strcpy(result, logfs_directory);
     strcat(result, MOUNTED_IMAGE_RELATIVE_PATH);
-	
 
 	struct file *log= filp_open(result, O_WRONLY, 0);
 	kfree(result);
@@ -571,36 +570,59 @@ static void deferred_work_function(struct work_struct *work){
 	
 	char str[SHA256_LENGTH] = {0};
 	
-	snprintf(str, sizeof(str), "%d", deferred_data->tgid);
+	/*
+	if (data == NULL) {
+    printk(KERN_ERR "%s: data is NULL\n", MODNAME);
+	} else {
+		if (data->open_path == NULL) {
+			printk(KERN_ERR "%s: data->open_path is NULL\n", MODNAME);
+		}
+
+		if (data->caller_path == NULL) {
+			printk(KERN_ERR "%s: data->caller_path is NULL\n", MODNAME);
+		}
+
+		printk("%s: tgid: %d, tid:%d, uid:%d, euid:%d, opened file:%s, caller path:%s",
+			MODNAME,
+			data->tgid,
+			data->tid,
+			data->uid,
+			data->euid,
+			data->open_path ? data->open_path : "NULL",
+			data->caller_path ? data->caller_path : "NULL");
+	}
+	*/
+
+	snprintf(str, sizeof(str), "%d", data->tgid);
 	log->f_op->write(log, str, sizeof(str) ,&log->f_pos);
 	log->f_op->write(log, DIVIDER, sizeof(DIVIDER) ,&log->f_pos);
 	memset(str,0,sizeof(str));
 
-	snprintf(str, sizeof(str), "%d", deferred_data->tid);
+	snprintf(str, sizeof(str), "%d", data->tid);
 	log->f_op->write(log, str, sizeof(str) ,&log->f_pos);
 	log->f_op->write(log, DIVIDER, sizeof(DIVIDER) ,&log->f_pos);
 	memset(str,0,sizeof(str));
 
-	snprintf(str, sizeof(str), "%d", deferred_data->uid);
+	snprintf(str, sizeof(str), "%d", data->uid);
 	log->f_op->write(log, str, sizeof(str) ,&log->f_pos);
 	log->f_op->write(log, DIVIDER, sizeof(DIVIDER) ,&log->f_pos);
 	memset(str,0,sizeof(str));
 
-	snprintf(str, sizeof(str), "%d", deferred_data->euid);
+	snprintf(str, sizeof(str), "%d", data->euid);
 	log->f_op->write(log, str, sizeof(str) ,&log->f_pos);
 	log->f_op->write(log, DIVIDER, sizeof(DIVIDER) ,&log->f_pos);
 
-	log->f_op->write(log, deferred_data->open_path, sizeof(deferred_data->open_path) ,&log->f_pos);
+	log->f_op->write(log, data->open_path, sizeof(data->open_path) ,&log->f_pos);
 	log->f_op->write(log, DIVIDER, sizeof(DIVIDER) ,&log->f_pos);
 
-	log->f_op->write(log, deferred_data->caller_path, sizeof(deferred_data->caller_path) ,&log->f_pos);
+	log->f_op->write(log, data->caller_path, sizeof(data->caller_path) ,&log->f_pos);
 	log->f_op->write(log, DIVIDER, sizeof(DIVIDER) ,&log->f_pos);
 
 	int i= 0;
 	for(i = 0; i < SHA256_LENGTH; i++) {
 		memset(str, 0, SHA256_LENGTH);
 		sprintf(str, "%x", data->hash[i]);
-        printk(KERN_CONT "%x", data->hash[i]);
+        //printk(KERN_CONT "%x", data->hash[i]);
 		log->f_op->write(log, str, strlen(str) ,&log->f_pos);
     }
 
@@ -618,92 +640,311 @@ defer_out:
 	
 }
 
-static int the_hook(struct kretprobe_instance *ri, struct pt_regs *the_regs) { 
-
-	int fd = regs_return_value(the_regs);
-	if(fd<=0) return -EBADFD;
-
-	char *buffer = kmalloc(PATH_MAX, GFP_KERNEL);
-
-	struct file* file = fget(fd);
-	if (!file) return 1;
-
-	preempt_enable();
+int isPathProtected(const char *filename){
 
 	mutex_lock(&probe_lock);
-	if(current_state == OFF || current_state == REC_OFF) goto out;	
-
-	unsigned int accessMode = file->f_flags & O_ACCMODE;
-	if(accessMode == O_RDONLY || head == NULL) goto out;
-
-	char *path = d_path(&file->f_path, buffer, PATH_MAX);
-
-	if (IS_ERR(path)) goto out;
-
-	struct path_node *curr = head;     
+	struct path_node *curr = head;  
 
 	while (curr != NULL) {
-		
-		if(strcmp(path, curr->path)==0 || (curr->path[strlen(curr->path)-1] == '/' && strncmp(path, curr->path, strlen(curr->path))==0) ){
+		if(strcmp(filename, curr->path)==0 || (curr->path[strlen(curr->path)-1] == '/' && strncmp(filename, curr->path, strlen(curr->path))==0) ){
 			mutex_unlock(&probe_lock);
-			printk("%s: preventing write-open of %s\n",MODNAME, path);
-			
-			deferred_data = kmalloc(sizeof(struct deferred_work_data), GFP_KERNEL);
-        	if (deferred_data) {
-            	deferred_data->tgid = current->tgid;
-            	deferred_data->tid = current->pid;
-            	deferred_data->uid = current_uid().val;
-            	deferred_data->euid = current_euid().val;
-				strcpy(deferred_data->open_path, path);
-
-				char* p = NULL, *pathname;
-				struct mm_struct* mm = current->mm;
-				if (mm)
-				{
-					down_read(&mm->mmap_lock);
-					if (mm->exe_file) 
-					{
-						pathname = kmalloc(PATH_MAX, GFP_ATOMIC);
-						if (pathname){
-							p = d_path(&mm->exe_file->f_path, pathname, PATH_MAX);
-							strcpy(deferred_data->caller_path, p);     
-							kfree(pathname);       
-						}
-					}
-					up_read(&mm->mmap_lock);
-				}
-
-				printk("%s: tgid: %d, tid:%d, uid:%d, euid:%d, opened file:%s, caller path:%s", MODNAME, deferred_data->tgid, deferred_data->tid, deferred_data->uid, deferred_data->euid, deferred_data->open_path, deferred_data->caller_path);
-				INIT_WORK(&deferred_data->real_work, deferred_work_function);
-				schedule_work(&deferred_data->real_work);
-			}
-
-			
-			filp_close(file, NULL); // calls fput internally
-			regs_set_return_value(the_regs, -1);
-			preempt_disable();
-			kfree(buffer);
-			return -EPERM;
-			
+			return 1;			
 		}
 		curr = curr->next;
 	}
-
-out:
+	
 	mutex_unlock(&probe_lock);
-	fput(file);
-    preempt_disable();
-	kfree(buffer);
+    return 0;
+}
+
+void initializeDeferredWork(char* path){
+	struct deferred_work_data *deferred_data;
+	
+	deferred_data = kmalloc(sizeof(struct deferred_work_data), GFP_KERNEL);
+
+    if (deferred_data) {
+        deferred_data->tgid = current->tgid;
+        deferred_data->tid = current->pid;
+        deferred_data->uid = current_uid().val;
+        deferred_data->euid = current_euid().val;
+		strcpy(deferred_data->open_path, path);
+
+		char* p = NULL, *pathname;
+		struct mm_struct* mm = current->mm;
+		if (mm){
+			down_read(&mm->mmap_lock);
+			if (mm->exe_file) {
+				pathname = kmalloc(PATH_MAX, GFP_ATOMIC);
+				if (pathname){
+					p = d_path(&mm->exe_file->f_path, pathname, PATH_MAX);
+					strcpy(deferred_data->caller_path, p);     
+					kfree(pathname);       
+				}
+			}
+			up_read(&mm->mmap_lock);
+		}
+		INIT_WORK(&deferred_data->real_work, deferred_work_function);
+		schedule_work(&deferred_data->real_work);
+	}
+}
+
+static int kretprobe_handler(struct kretprobe_instance *ri, struct pt_regs *the_regs) { 
+	regs_set_return_value(the_regs, -EACCES);
 	return 0;
 }
 
-static struct kretprobe retprobe;  
+static int openat_pre_handler(struct kretprobe_instance *ri, struct pt_regs *the_regs) {
+	atomic_inc((atomic_t*)&openat_audit_counter);
+	struct pt_regs *regs = (struct pt_regs*)the_regs->di;
+
+	//asmlinkage long sys_openat(int dfd, const char __user *filename, int flags,
+	//		   umode_t mode);
+    const char __user *filename = (const char __user *)regs->si;
+    int flags = (int)regs->dx;
+	unsigned int accessMode = flags & O_ACCMODE;
+
+	if(current_state == OFF || current_state == REC_OFF) goto openat_out;	
+	if(accessMode == O_RDONLY || head == NULL) goto openat_out;
+
+	char *kernel_filename;
+
+	// Allocate memory for kernel space filename
+    kernel_filename = kmalloc(PATH_MAX, GFP_KERNEL);
+    if (!kernel_filename) {
+        printk(KERN_ERR "Memory allocation for kernel_filename failed\n");
+        goto openat_kfree_out;
+    }
+
+	// Copy the filename from user space to kernel space
+    if (copy_from_user(kernel_filename, filename, PATH_MAX)) {
+        printk(KERN_ERR "Failed to copy filename from user space\n");
+        goto openat_kfree_out;
+    }
+
+	if(kernel_filename[0] != '/'){
+		struct file* file = fget(regs->di);
+		if (!file) goto openat_kfree_out;
+
+		char *buffer = kmalloc(PATH_MAX, GFP_KERNEL);
+		char *path = d_path(&file->f_path, buffer, PATH_MAX);
+
+		char *concatenated_path = kmalloc(PATH_MAX, GFP_KERNEL);
+		if (!concatenated_path) {
+			printk(KERN_ERR "Memory allocation for concatenated_path failed\n");
+			kfree(buffer);
+			goto openat_kfree_out;
+		}
+
+		snprintf(concatenated_path, PATH_MAX, "%s/%s", path, kernel_filename);
+
+		strncpy(kernel_filename, concatenated_path, PATH_MAX - 1);
+		kernel_filename[PATH_MAX - 1] = '\0';
+
+		kfree(concatenated_path);
+		kfree(buffer);
+	} 
+
+	if(isPathProtected(kernel_filename)==1){
+		initializeDeferredWork(kernel_filename);
+		regs->si = "";
+		return 0;
+	}
+
+openat_kfree_out:
+	kfree(kernel_filename);
+openat_out:
+    return 1;
+}
+
+
+
+static int unlinkat_pre_handler(struct kretprobe_instance *ri, struct pt_regs *the_regs) {
+	atomic_inc((atomic_t*)&unlinkat_audit_counter);
+	struct pt_regs *regs = (struct pt_regs*)the_regs->di;
+
+	//asmlinkage long sys_unlink(const char __user *pathname);
+    const char __user *filename = (const char __user *)regs->di;
+
+	if(current_state == OFF || current_state == REC_OFF || head == NULL) goto unlink_out;
+
+	char *kernel_filename;
+
+	// Allocate memory for kernel space filename
+    kernel_filename = kmalloc(PATH_MAX, GFP_KERNEL);
+    if (!kernel_filename) {
+        printk(KERN_ERR "Memory allocation for kernel_filename failed\n");
+        goto unlink_out;
+    }
+
+	// Copy the filename from user space to kernel space
+    if (copy_from_user(kernel_filename, filename, PATH_MAX)) {
+        printk(KERN_ERR "Failed to copy filename from user space\n");
+        goto unlink_kfree_out;
+    }
+
+	if(isPathProtected(kernel_filename)==1){
+		initializeDeferredWork(kernel_filename);
+		regs->di = "";
+		return 0;
+	}
+
+unlink_kfree_out:
+	kfree(kernel_filename);
+unlink_out:
+    return 1;
+}
+
+static int rmdir_pre_handler(struct kretprobe_instance *ri, struct pt_regs *the_regs) {
+	atomic_inc((atomic_t*)&rmdir_audit_counter);
+	struct pt_regs *regs = (struct pt_regs*)the_regs->di;
+
+	// asmlinkage long sys_rmdir(const char __user *pathname);
+    const char __user *filename = (const char __user *)regs->di;
+
+	if(current_state == OFF || current_state == REC_OFF || head == NULL) goto rmdir_out;
+
+	char *kernel_filename;
+
+	// Allocate memory for kernel space filename
+    kernel_filename = kmalloc(PATH_MAX, GFP_KERNEL);
+    if (!kernel_filename) {
+        printk(KERN_ERR "Memory allocation for kernel_filename failed\n");
+        goto rmdir_out;
+    }
+
+	// Copy the filename from user space to kernel space
+    if (copy_from_user(kernel_filename, filename, PATH_MAX)) {
+        printk(KERN_ERR "Failed to copy filename from user space\n");
+        goto rmdir_kfree_out;
+    }
+
+	if(isPathProtected(kernel_filename)==1){
+		initializeDeferredWork(kernel_filename);
+		regs->di = "";
+		return 0;
+	}
+
+rmdir_kfree_out:
+	kfree(kernel_filename);
+rmdir_out:
+    return 1;
+}
+
+static int mkdirat_pre_handler(struct kretprobe_instance *ri, struct pt_regs *the_regs) {
+	atomic_inc((atomic_t*)&mkdirat_audit_counter);
+	struct pt_regs *regs = (struct pt_regs*)the_regs->di;
+
+	// asmlinkage long sys_mkdir(const char __user *pathname, umode_t mode);
+    const char __user *filename = (const char __user *)regs->di;
+
+	if(current_state == OFF || current_state == REC_OFF || head == NULL) goto mkdir_out;
+
+	char *kernel_filename;
+
+	// Allocate memory for kernel space filename
+    kernel_filename = kmalloc(PATH_MAX, GFP_KERNEL);
+    if (!kernel_filename) {
+        printk(KERN_ERR "Memory allocation for kernel_filename failed\n");
+        goto mkdir_out;
+    }
+
+	// Copy the filename from user space to kernel space
+    if (copy_from_user(kernel_filename, filename, PATH_MAX)) {
+        printk(KERN_ERR "Failed to copy filename from user space\n");
+        goto mkdir_kfree_out;
+    }
+
+	if(isPathProtected(kernel_filename)==1){
+		initializeDeferredWork(kernel_filename);
+		regs->di = "";
+		return 0;
+	}
+
+mkdir_kfree_out:
+	kfree(kernel_filename);
+mkdir_out:
+    return 1;
+}
+
+static int rename_pre_handler(struct kretprobe_instance *ri, struct pt_regs *the_regs) {
+	atomic_inc((atomic_t*)&rename_audit_counter);
+	struct pt_regs *regs = (struct pt_regs*)the_regs->di;
+
+	// asmlinkage long sys_rename(const char __user *oldname,
+	//				const char __user *newname);
+	const char __user *filename = (const char __user *)regs->di;
+
+	if(current_state == OFF || current_state == REC_OFF || head == NULL) goto rename_out;
+
+	char *kernel_filename;
+
+	// Allocate memory for kernel space filename
+    kernel_filename = kmalloc(PATH_MAX, GFP_KERNEL);
+    if (!kernel_filename) {
+        printk(KERN_ERR "Memory allocation for kernel_filename failed\n");
+        goto rename_out;
+    }
+
+	// Copy the filename from user space to kernel space
+    if (copy_from_user(kernel_filename, filename, PATH_MAX)) {
+        printk(KERN_ERR "Failed to copy filename from user space\n");
+        goto rename_kfree_out;
+    }
+
+	if(isPathProtected(kernel_filename)==1){
+		initializeDeferredWork(kernel_filename);
+		regs->di = "";
+		return 0;
+	}
+
+rename_kfree_out:
+	kfree(kernel_filename);
+rename_out:
+    return 1;
+}
+
+
+static struct kretprobe openat_retprobe = {
+    .kp.symbol_name = "__x64_sys_openat",  // (ver 4.17 introduced syscall wrappers)
+    .handler = kretprobe_handler,
+    .entry_handler = openat_pre_handler,
+    .maxactive = -1
+};
+
+static struct kretprobe unlinkat_retprobe = {
+    .kp.symbol_name = "__x64_sys_unlink",  // (ver 4.17 introduced syscall wrappers)
+    .handler = kretprobe_handler,
+    .entry_handler = unlinkat_pre_handler,
+    .maxactive = -1
+};
+
+static struct kretprobe rmdir_retprobe = {
+	.kp.symbol_name = "__x64_sys_rmdir",
+    .handler = kretprobe_handler,
+    .entry_handler = rmdir_pre_handler,
+    .maxactive = -1
+};
+
+static struct kretprobe mkdirat_retprobe = {
+    .kp.symbol_name = "__x64_sys_mkdir",  // (ver 4.17 introduced syscall wrappers)
+    .handler = kretprobe_handler,
+    .entry_handler = mkdirat_pre_handler,
+    .maxactive = -1
+};
+
+static struct kretprobe rename_retprobe = {
+    .kp.symbol_name = "__x64_sys_rename",  // (ver 4.17 introduced syscall wrappers)
+    .handler = kretprobe_handler,
+    .entry_handler = rename_pre_handler,
+    .maxactive = -1
+};
+
 
 int  init_module(void) {
 
 	int ret;
 
-	if (LINUX_VERSION_CODE < KERNEL_VERSION(5,11,0)){
+	if (LINUX_VERSION_CODE < KERNEL_VERSION(5,15,0)){
 	 	printk("%s: unsupported kernel version", MODNAME);
 		return -1; 	
 	};
@@ -715,17 +956,44 @@ int  init_module(void) {
 	proc_create_data(CONFIG_FILE,0,NULL,&proc_fops,NULL);
 	proc_create_data(PROTECTED_LIST_FILE,0,NULL,&protected_fops,NULL);
 
-	retprobe.kp.symbol_name = target_func;
-	retprobe.handler = (kretprobe_handler_t)the_hook;
-	retprobe.maxactive = -1;
-
-	ret = register_kretprobe(&retprobe);
-
+	ret = register_kretprobe(&openat_retprobe);
 	if (ret < 0) {
 		printk("%s: hook init failed, returned %d\n", MODNAME, ret);
 		return ret;
 	}
-	printk("%s: read hook module correctly loaded\n", MODNAME);
+
+    ret = register_kretprobe(&unlinkat_retprobe);
+    if (ret < 0) {
+        printk(KERN_ERR "register_kretprobe failed for unlink: %d\n", ret);
+        unregister_kretprobe(&openat_retprobe);
+        return ret;
+    }
+
+    ret = register_kretprobe(&mkdirat_retprobe);
+    if (ret < 0) {
+        printk(KERN_ERR "register_kretprobe failed for mkdir: %d\n", ret);
+        unregister_kretprobe(&openat_retprobe);
+        unregister_kretprobe(&unlinkat_retprobe);
+        return ret;
+    }
+
+	ret = register_kretprobe(&rmdir_retprobe);
+    if (ret < 0) {
+        printk(KERN_ERR "register_kretprobe failed for rmdir: %d\n", ret);
+        unregister_kretprobe(&openat_retprobe);
+        unregister_kretprobe(&unlinkat_retprobe);
+        return ret;
+    }
+
+	ret = register_kretprobe(&rename_retprobe);
+    if (ret < 0) {
+        printk(KERN_ERR "register_kretprobe failed for rmdir: %d\n", ret);
+        unregister_kretprobe(&openat_retprobe);
+        unregister_kretprobe(&unlinkat_retprobe);
+        return ret;
+    }
+
+	printk("%s: module correctly loaded\n", MODNAME);
 
 	ret = register_filesystem(&logfilefs_type);
 
@@ -733,20 +1001,32 @@ int  init_module(void) {
         printk("%s: sucessfully registered %s\n",MODNAME, FILESYSTEM_NAME);
     else{
         printk("%s: failed to register %s - error %d", MODNAME,FILESYSTEM_NAME, ret);
-		unregister_kretprobe(&retprobe);
+		unregister_kretprobe(&openat_retprobe);
+		unregister_kretprobe(&unlinkat_retprobe);
+		unregister_kretprobe(&mkdirat_retprobe);
 	}
 
 	// resist rmmod
-	if(!try_module_get(THIS_MODULE)){
-		printk("%s: failed to increase reference count", MODNAME);
-	}
+	//if(!try_module_get(THIS_MODULE)){
+	//	printk("%s: failed to increase reference count", MODNAME);
+	//}
 	
 	return ret;
 }
 
 void cleanup_module(void){
 	flush_scheduled_work();
-	unregister_kretprobe(&retprobe);
+	unregister_kretprobe(&openat_retprobe);
+	unregister_kretprobe(&unlinkat_retprobe);
+	unregister_kretprobe(&mkdirat_retprobe);
+	unregister_kretprobe(&rmdir_retprobe);
+	unregister_kretprobe(&rename_retprobe);
+
+	printk("%s: openat hook invoked %lu times\n",MODNAME, openat_audit_counter);
+    printk("%s: unlinkat hook invoked %lu times\n",MODNAME, unlinkat_audit_counter);
+    printk("%s: mkdirat hook invoked %lu times\n",MODNAME, mkdirat_audit_counter);
+	printk("%s: rmdir hook invoked %lu times\n",MODNAME, rmdir_audit_counter);
+	printk("%s: rename hook invoked %lu times\n",MODNAME, rename_audit_counter);
 
 	printk("%s: module unloaded\n",MODNAME);
 
