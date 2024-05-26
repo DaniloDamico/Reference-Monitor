@@ -1,0 +1,10 @@
+
+*.cmd
+image
+*.o
+logfilefs/mklogfs
+*.symvers
+*.order
+*.ko
+*.mod
+user/usercode
