@@ -58,13 +58,13 @@ MODULE_LICENSE("GPL");
 #define SETSTATE "setstate"
 #define ADDPATH "addpath"
 #define REMOVEPATH "removepath"
-#define UNINSTALL "uninstall"
+#define LOCK "lock"
+#define UNLOCK "unlock"
 
 DEFINE_MUTEX(protected_paths);
-DEFINE_MUTEX(password);
+DEFINE_MUTEX(password_lock);
 DEFINE_MUTEX(state);
-int rmmod_lock = 1;
-
+DEFINE_MUTEX(remove);
 enum RM_State
 {
 	OFF,
@@ -76,6 +76,9 @@ enum RM_State
 enum RM_State current_state = OFF;
 static char *state_char = "OFF";
 module_param(state_char, charp, S_IRUGO);
+
+int rmmod_lock = 0;
+module_param(rmmod_lock, int, S_IRUGO);
 
 struct path_node
 {
@@ -226,7 +229,7 @@ int encrypt_password(char *plaintext, int textsize)
 		goto out;
 	}
 
-	mutex_lock(&password);
+	mutex_lock(&password_lock);
 	/* Prepare the input data */
 	kfree(password_data);
 	password_data = kzalloc(PASSWORD_DATA_SIZE, GFP_KERNEL);
@@ -255,7 +258,7 @@ int encrypt_password(char *plaintext, int textsize)
 	}
 
 out:
-	mutex_unlock(&password);
+	mutex_unlock(&password_lock);
 	crypto_free_skcipher(tfm);
 	skcipher_request_free(req);
 	return err;
@@ -293,7 +296,7 @@ int check_password(char *password)
 	u8 iv_copy[16];
 	strncpy(iv_copy, iv, 16);
 
-	mutex_lock(&password);
+	mutex_lock(&password_lock);
 
 	u8 *password_data_copy = kzalloc(PASSWORD_DATA_SIZE, GFP_KERNEL);
 	if (!password_data_copy)
@@ -325,7 +328,7 @@ int check_password(char *password)
 	}
 
 out:
-	mutex_unlock(&password);
+	mutex_unlock(&password_lock);
 	kfree(password_data_copy);
 	crypto_free_skcipher(tfm);
 	skcipher_request_free(req);
@@ -368,14 +371,14 @@ ssize_t write_proc(struct file *filp, const char *buf, size_t count, loff_t *off
 	char *third_word = NULL; // parameter
 	if (second_word != NULL)
 	{
-		if (strcmp(second_word, UNINSTALL) != 0)
+		if (strcmp(second_word, LOCK) != 0 && strcmp(second_word, UNLOCK) != 0)
 		{
 			strsep(&data_pointer, "\"");
 			third_word = strsep(&data_pointer, "\"");
 		}
 	}
 
-	if ((first_word == NULL || second_word == NULL) || (third_word == NULL && strncmp(second_word, UNINSTALL, strlen(UNINSTALL)) != 0))
+	if ((first_word == NULL || second_word == NULL) || (third_word == NULL && (strncmp(second_word, LOCK, strlen(LOCK)) != 0 && strncmp(second_word, UNLOCK, strlen(UNLOCK)) != 0)))
 	{
 		printk("%s: badly formatted input. Try: password command \"parameter\"\n", MODNAME);
 		return 2; // error acquiring command
@@ -408,31 +411,31 @@ ssize_t write_proc(struct file *filp, const char *buf, size_t count, loff_t *off
 		// parse new state
 		if (strcmp(third_word, "OFF") == 0)
 		{
-			mutext_lock(&state);
+			mutex_lock(&state);
 			current_state = OFF;
 			state_char = "OFF";
-			mutext_unlock(&state);
+			mutex_unlock(&state);
 		}
 		else if (strcmp(third_word, "ON") == 0)
 		{
-			mutext_lock(&state);
+			mutex_lock(&state);
 			current_state = ON;
 			state_char = "ON";
-			mutext_unlock(&state);
+			mutex_unlock(&state);
 		}
 		else if (strcmp(third_word, "REC_OFF") == 0)
 		{
-			mutext_lock(&state);
+			mutex_lock(&state);
 			current_state = REC_OFF;
 			state_char = "REC_OFF";
-			mutext_unlock(&state);
+			mutex_unlock(&state);
 		}
 		else if (strcmp(third_word, "REC_ON") == 0)
 		{
-			mutext_lock(&state);
+			mutex_lock(&state);
 			current_state = REC_ON;
 			state_char = "REC_ON";
-			mutext_unlock(&state);
+			mutex_unlock(&state);
 		}
 		else
 		{
@@ -445,15 +448,15 @@ ssize_t write_proc(struct file *filp, const char *buf, size_t count, loff_t *off
 	{
 		printk("%s: you chose %s.\n", MODNAME, ADDPATH);
 
-		mutext_lock(&state);
+		mutex_lock(&state);
 		if (current_state == OFF || current_state == ON)
 		{
-			mutext_unlock(&state);
+			mutex_unlock(&state);
 			printk("%s: the module is not in a reconfigurable state.\n", MODNAME);
 			ret = 5; // module not in a reconfigurable state
 			goto end_write;
 		}
-		mutext_unlock(&state);
+		mutex_unlock(&state);
 
 		struct path path;
 		int isDir = 0;
@@ -476,21 +479,38 @@ ssize_t write_proc(struct file *filp, const char *buf, size_t count, loff_t *off
 	{
 		printk("%s: you chose %s.\n", MODNAME, REMOVEPATH);
 
-		mutext_lock(&state);
+		mutex_lock(&state);
 		if (current_state == OFF || current_state == ON)
 		{
-			mutext_unlock(&state);
+			mutex_unlock(&state);
 			printk("%s: the module is not in a reconfigurable state.\n", MODNAME);
 			ret = 5; // module not in a reconfigurable state
 			goto end_write;
 		}
-		mutext_unlock(&state);
+		mutex_unlock(&state);
 
 		free_protected_path(third_word);
 	}
-	else if (strncmp(second_word, UNINSTALL, strlen(UNINSTALL)) == 0)
+	else if (strncmp(second_word, LOCK, strlen(LOCK)) == 0)
 	{
-
+		mutex_lock(&remove);
+		if (rmmod_lock == 0)
+		{
+			if(!try_module_get(THIS_MODULE)){
+				printk("%s: failed to increase reference count", MODNAME);
+			} else{
+				rmmod_lock = 1;
+			}
+		}
+		else
+		{
+			printk("%s: module already locked\n", MODNAME);
+		}
+		mutex_unlock(&remove);
+	}
+	else if (strncmp(second_word, UNLOCK, strlen(UNLOCK)) == 0)
+	{
+		mutex_lock(&remove);
 		if (rmmod_lock == 1)
 		{
 			module_put(THIS_MODULE);
@@ -500,6 +520,7 @@ ssize_t write_proc(struct file *filp, const char *buf, size_t count, loff_t *off
 		{
 			printk("%s: module already unlocked\n", MODNAME);
 		}
+		mutex_unlock(&remove);
 	}
 	else
 	{
@@ -765,12 +786,12 @@ static int openat_pre_handler(struct kretprobe_instance *ri, struct pt_regs *the
 	int flags = (int)regs->dx;
 	unsigned int accessMode = flags & O_ACCMODE;
 
-	mutext_lock(&state);
+	mutex_lock(&state);
 	if (current_state == OFF || current_state == REC_OFF){
-		mutext_unlock(&state);
+		mutex_unlock(&state);
 		goto openat_out;
 	}
-	mutext_unlock(&state);
+	mutex_unlock(&state);
 		
 	mutex_lock(&protected_paths);
 	if (head == NULL){
@@ -845,12 +866,12 @@ static int di_pathname_pre_handler(struct kretprobe_instance *ri, struct pt_regs
 	// asmlinkage long sys_rename(const char __user *oldname, const char __user *newname);
 	const char __user *filename = (const char __user *)regs->di;
 
-	mutext_lock(&state);
+	mutex_lock(&state);
 	if (current_state == OFF || current_state == REC_OFF){
-		mutext_unlock(&state);
+		mutex_unlock(&state);
 		goto dipath_out;
 	}
-	mutext_unlock(&state);
+	mutex_unlock(&state);
 
 	mutex_lock(&protected_paths);
 	if (head == NULL){

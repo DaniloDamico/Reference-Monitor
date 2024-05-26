@@ -5,10 +5,40 @@
 
 #define STATE_FILE "/sys/module/reference_monitor/parameters/state_char"
 #define CURRSTATE "currstate"
+
+#define LOCK_FILE "/sys/module/reference_monitor/parameters/rmmod_lock"
+#define CURRLOCK "currlock"
+
 #define LISTPROTECTED "listprotected"
 #define LISTPROTECTED_FILE "/proc/rm_protected"
 #define LOG "log"
 #define LOG_FILE "/mnt/mountfs/logfile"
+#define HELP "help"
+
+void help(){
+    printf("use this program to communicate with the Reference Monitor\n");
+    printf("the default password is \"passw\" and will be used in the following examples\n");
+    printf("Commands:\n");
+    printf("\tpassw changepassw \"newpassw\"\n");
+    printf("\tpassw setstate \"REC_ON\"\n");
+    printf("\tpassw addpath \"/absolute/path\"\n");
+    printf("\tpassw removepath \"/absolute/path\"\n");
+
+    printf("\nCommands to allow module removal:\n");
+    printf("\tpassw lock\n");
+    printf("\tpassw unlock\n");
+
+    printf("\nOther commands:\n");
+    printf("\tcurrstate\n");
+    printf("\tcurrlock\n");
+    printf("\tlistprotected\n");
+    printf("\tlog\n");
+    printf("\thelp\n");
+
+    printf("The states are: OFF, ON, REC_OFF, REC_ON.\n");
+    printf("You can only add or remove paths in REC_OFF or REC_ON state.\n");
+    printf("\n");
+}
 
 void print_file(char *filepath)
 {
@@ -45,21 +75,7 @@ int main()
         return 1;
     }
 
-    printf("use this program to communicate with the Reference Monitor\n");
-    printf("the default password is \"passw\" and will be used in the following examples\n");
-    printf("Usage:\n");
-    printf("\tpassw changepassw \"newpassw\"\n");
-    printf("\tpassw setstate \"REC_ON\"\n");
-    printf("\tpassw addpath \"/absolute/path\"\n");
-    printf("\tpassw removepath \"/absolute/path\"\n");
-    printf("\tpassw uninstall\n");
-    printf("\tcurrstate\n");
-    printf("\tlistprotected\n");
-    printf("\tlog\n");
-
-    printf("You can only add or remove paths in REC_OFF or REC_ON state.\n");
-    printf("Uninstall removes the reference count the module calls to prevent rmmod from working.\n");
-    printf("\n");
+    help();
 
     while (1)
     {
@@ -88,6 +104,18 @@ int main()
         {
             print_file(LOG_FILE);
             printf("\n");
+            continue;
+        }
+
+        if (strcmp(userInput, CURRLOCK) == 0)
+        {
+            print_file(LOCK_FILE);
+            continue;
+        }
+
+        if (strcmp(userInput, HELP) == 0)
+        {
+            help();
             continue;
         }
 
