@@ -448,9 +448,10 @@ ssize_t write_proc(struct file *filp, const char *buf, size_t count, loff_t *off
 			goto end_write;
 		}
 
-		if (S_ISDIR(path.dentry->d_inode->i_mode)) {
-        	isDir = 1;
-    	}
+		if (S_ISDIR(path.dentry->d_inode->i_mode))
+		{
+			isDir = 1;
+		}
 
 		mutex_lock(&probe_lock);
 		add_protected_path(third_word, isDir);
@@ -678,7 +679,7 @@ static void deferred_work_function(struct work_struct *work)
 	for (i = 0; i < SHA256_LENGTH; i++)
 	{
 		memset(str, 0, SHA256_LENGTH);
-		sprintf(str, "%x", data->hash[i]);
+		snprintf(str, 3, "%02x", data->hash[i]);
 		// printk(KERN_CONT "%x", data->hash[i]);
 		log->f_op->write(log, str, strlen(str), &log->f_pos);
 	}
@@ -784,10 +785,7 @@ static int openat_pre_handler(struct kretprobe_instance *ri, struct pt_regs *the
 
 	// Copy the filename from user space to kernel space
 	if (copy_from_user(kernel_filename, filename, PATH_MAX))
-	{
-		printk(KERN_ERR "Failed to copy filename from user space\n");
 		goto openat_kfree_out;
-	}
 
 	if (kernel_filename[0] != '/')
 	{
@@ -853,10 +851,7 @@ static int di_pathname_pre_handler(struct kretprobe_instance *ri, struct pt_regs
 
 	// Copy the filename from user space to kernel space
 	if (copy_from_user(kernel_filename, filename, PATH_MAX))
-	{
-		printk(KERN_ERR "Failed to copy filename from user space\n");
 		goto dipath_kfree_out;
-	}
 
 	if (isPathProtected(kernel_filename) == 1)
 	{
