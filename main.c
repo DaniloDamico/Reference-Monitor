@@ -625,8 +625,6 @@ static void deferred_work_function(struct work_struct *work)
 		goto defer_out;
 	}
 
-	char str[SHA256_LENGTH] = {0};
-
 	/*
 	if (data == NULL) {
 	printk(KERN_ERR "%s: data is NULL\n", MODNAME);
@@ -650,30 +648,16 @@ static void deferred_work_function(struct work_struct *work)
 	}
 	*/
 
-	snprintf(str, sizeof(str), "%d", data->tgid);
+	char str[sizeof(data->tgid) + sizeof(data->tid) + sizeof(data->uid) + sizeof(data->euid) + sizeof(data->open_path) + sizeof(data->caller_path) + 6 * sizeof(DIVIDER)] = {0};
+
+	snprintf(str, sizeof(str), "%d%s%d%s%d%s%d%s%s%s%s%s",
+			 data->tgid, DIVIDER,
+			 data->tid, DIVIDER,
+			 data->uid, DIVIDER,
+			 data->euid, DIVIDER,
+			 data->open_path, DIVIDER,
+			 data->caller_path, DIVIDER);
 	log->f_op->write(log, str, sizeof(str), &log->f_pos);
-	log->f_op->write(log, DIVIDER, sizeof(DIVIDER), &log->f_pos);
-	memset(str, 0, sizeof(str));
-
-	snprintf(str, sizeof(str), "%d", data->tid);
-	log->f_op->write(log, str, sizeof(str), &log->f_pos);
-	log->f_op->write(log, DIVIDER, sizeof(DIVIDER), &log->f_pos);
-	memset(str, 0, sizeof(str));
-
-	snprintf(str, sizeof(str), "%d", data->uid);
-	log->f_op->write(log, str, sizeof(str), &log->f_pos);
-	log->f_op->write(log, DIVIDER, sizeof(DIVIDER), &log->f_pos);
-	memset(str, 0, sizeof(str));
-
-	snprintf(str, sizeof(str), "%d", data->euid);
-	log->f_op->write(log, str, sizeof(str), &log->f_pos);
-	log->f_op->write(log, DIVIDER, sizeof(DIVIDER), &log->f_pos);
-
-	log->f_op->write(log, data->open_path, sizeof(data->open_path), &log->f_pos);
-	log->f_op->write(log, DIVIDER, sizeof(DIVIDER), &log->f_pos);
-
-	log->f_op->write(log, data->caller_path, sizeof(data->caller_path), &log->f_pos);
-	log->f_op->write(log, DIVIDER, sizeof(DIVIDER), &log->f_pos);
 
 	int i = 0;
 	for (i = 0; i < SHA256_LENGTH; i++)
