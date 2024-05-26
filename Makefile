@@ -2,7 +2,7 @@ IMAGE_PATH := $(shell pwd)/image
 MOUNT_PATH := /mnt/mountfs/
 
 obj-m += reference_monitor.o
-reference_monitor-objs += main.o logfilefs/dir.o logfilefs/file.o logfilefs/logfilefs.o
+reference_monitor-objs += main.o logfilefs/dir.o logfilefs/file.o logfilefs/logfilefs.o cryptography.o module.o
 
 all:
 	dd bs=4096 count=10000 if=/dev/zero of=$(IMAGE_PATH)
