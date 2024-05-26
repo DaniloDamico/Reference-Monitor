@@ -19,7 +19,7 @@ static int logfilefs_iterate(struct file *file, struct dir_context* ctx) {
 
 	if (ctx->pos == 0){
 		//printk("%s: we are inside readdir with ctx->pos set to %lld", SUBMODULE, ctx->pos);
-		if(!dir_emit(ctx,".", FILENAME_MAXLEN, LOGFILEFS_ROOT_INODE_NUMBER, DT_UNKNOWN)){
+		if(!dir_emit(ctx,".", FILENAME_MAXLEN, LOGFILEFS_ROOT_INODE_NUMBER, DT_DIR)){
 			return 0;
 		} 
 		else ctx->pos++;
@@ -28,13 +28,13 @@ static int logfilefs_iterate(struct file *file, struct dir_context* ctx) {
 	if (ctx->pos == 1){
 		//printk("%s: we are inside readdir with ctx->pos set to %lld", SUBMODULE, ctx->pos);
 		//here the inode number does not matter
-		if(!dir_emit(ctx,"..", FILENAME_MAXLEN, 1, DT_UNKNOWN)) return 0;
+		if(!dir_emit(ctx,"..", FILENAME_MAXLEN, 1, DT_DIR)) return 0;
 		else ctx->pos++;
 	}
 
 	if (ctx->pos == 2){
 		//printk("%s: we are inside readdir with ctx->pos set to %lld", SUBMODULE, ctx->pos);
-		if(!dir_emit(ctx, UNIQUE_FILE_NAME, FILENAME_MAXLEN, LOGFILEFS_FILE_INODE_NUMBER, DT_UNKNOWN)) return 0;
+		if(!dir_emit(ctx, UNIQUE_FILE_NAME, FILENAME_MAXLEN, LOGFILEFS_FILE_INODE_NUMBER, DT_REG)) return 0;
 		else ctx->pos++;
 	}
 

@@ -20,14 +20,14 @@
 
 #define UNIQUE_FILE_NAME "logfile"
 
-#define MOUNTED_IMAGE_RELATIVE_PATH "/mountfs/logfile"
+#define MOUNTED_IMAGE_PATH "/mnt/mountfs/logfile"
 #define FILESYSTEM_NAME "logfilefs"
 
 #define IMAGE_NAME "image"
 #define IMAGE_DATA_SIZE (4096 * 9998)
 
 
-#define MOUNT_PATH "./mountfs/"
+#define MOUNT_PATH "/mnt/mountfs/"
 
 //inode definition
 struct logfilefs_inode {

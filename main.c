@@ -72,9 +72,6 @@ DEFINE_MUTEX(lock);
 DEFINE_MUTEX(probe_lock);
 int rmmod_lock = 1;
 
-static char *logfs_directory = NULL;
-module_param(logfs_directory, charp, S_IRUGO);
-
 enum RM_State {
     OFF,
     ON,
@@ -549,20 +546,7 @@ static void deferred_work_function(struct work_struct *work){
 	memset(data->hash, 0, SHA256_LENGTH);
 	crypto_shash_final(&sdesc->shash, data->hash);
 
-	size_t len1 = strlen(logfs_directory);
-    size_t len2 = strlen(MOUNTED_IMAGE_RELATIVE_PATH);
-    char* result = (char*)kmalloc(len1 + len2 + 1, GFP_KERNEL);
-    if (!result) {
-        printk("%s: memory allocation failed.\n", MODNAME);
-		kfree(result);
-        goto defer_out;
-    }	
-
-    strcpy(result, logfs_directory);
-    strcat(result, MOUNTED_IMAGE_RELATIVE_PATH);
-
-	struct file *log= filp_open(result, O_WRONLY, 0);
-	kfree(result);
+	struct file *log= filp_open(MOUNTED_IMAGE_PATH, O_WRONLY, 0);
 	if(log == NULL || IS_ERR(log)){
 		printk("%s: failed to open logfile\n", MODNAME);
 		goto defer_out;

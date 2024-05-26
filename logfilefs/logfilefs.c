@@ -53,7 +53,7 @@ int logfilefs_fill_super(struct super_block *sb, void *data, int silent) {
     #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 2, 0) // nop_mnt_idmap introduced in kernel 6.2
         inode_init_owner(&nop_mnt_idmap, root_inode, NULL, S_IFREG);
     #else
-        inode_init_owner(sb->s_user_ns, root_inode, NULL, S_IFREG);
+        inode_init_owner(&init_user_ns, root_inode, NULL, S_IFREG);
     #endif
 
     root_inode->i_sb = sb;
