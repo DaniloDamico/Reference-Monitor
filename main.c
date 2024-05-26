@@ -60,8 +60,9 @@ MODULE_LICENSE("GPL");
 #define REMOVEPATH "removepath"
 #define UNINSTALL "uninstall"
 
-DEFINE_MUTEX(lock);
-DEFINE_MUTEX(probe_lock);
+DEFINE_MUTEX(protected_paths);
+DEFINE_MUTEX(password);
+DEFINE_MUTEX(state);
 int rmmod_lock = 1;
 
 enum RM_State
@@ -101,6 +102,7 @@ void add_protected_path(const char *path, int isDir)
 
 	new_node->isDir = isDir;
 
+	mutex_lock(&protected_paths);
 	if (head == NULL)
 	{
 		new_node->next = NULL;
@@ -111,12 +113,17 @@ void add_protected_path(const char *path, int isDir)
 		new_node->next = head;
 		head = new_node;
 	}
+	mutex_unlock(&protected_paths);
 }
 
 void free_protected_path(const char *path)
 {
-	if (head == NULL)
+	mutex_lock(&protected_paths);
+	if (head == NULL){
+		mutex_unlock(&protected_paths);
 		return;
+	}
+
 	struct path_node *prev = NULL;
 	struct path_node *curr = head;
 
@@ -150,11 +157,14 @@ void free_protected_path(const char *path)
 		prev = curr;
 		curr = curr->next;
 	}
+
+	mutex_unlock(&protected_paths);
 }
 
 void free_all_paths(void)
 {
 	struct path_node *temp;
+	mutex_lock(&protected_paths);
 	while (head != NULL)
 	{
 		temp = head;
@@ -162,6 +172,7 @@ void free_all_paths(void)
 		kfree(temp->path);
 		kfree(temp);
 	}
+	mutex_unlock(&protected_paths);
 }
 
 u8 *password_data = NULL;
@@ -215,6 +226,7 @@ int encrypt_password(char *plaintext, int textsize)
 		goto out;
 	}
 
+	mutex_lock(&password);
 	/* Prepare the input data */
 	kfree(password_data);
 	password_data = kzalloc(PASSWORD_DATA_SIZE, GFP_KERNEL);
@@ -223,6 +235,7 @@ int encrypt_password(char *plaintext, int textsize)
 		err = -ENOMEM;
 		goto out;
 	}
+
 	int copy_size = (textsize < PASSWORD_DATA_SIZE) ? textsize : (PASSWORD_DATA_SIZE - 1);
 	strncpy(password_data, plaintext, copy_size);
 
@@ -242,6 +255,7 @@ int encrypt_password(char *plaintext, int textsize)
 	}
 
 out:
+	mutex_unlock(&password);
 	crypto_free_skcipher(tfm);
 	skcipher_request_free(req);
 	return err;
@@ -279,6 +293,8 @@ int check_password(char *password)
 	u8 iv_copy[16];
 	strncpy(iv_copy, iv, 16);
 
+	mutex_lock(&password);
+
 	u8 *password_data_copy = kzalloc(PASSWORD_DATA_SIZE, GFP_KERNEL);
 	if (!password_data_copy)
 	{
@@ -309,6 +325,7 @@ int check_password(char *password)
 	}
 
 out:
+	mutex_unlock(&password);
 	kfree(password_data_copy);
 	crypto_free_skcipher(tfm);
 	skcipher_request_free(req);
@@ -330,7 +347,6 @@ ssize_t write_proc(struct file *filp, const char *buf, size_t count, loff_t *off
 	if (buf == NULL || count <= 0 || !access_ok(buf, count))
 	{
 		printk("%s: error acquiring command\n", MODNAME);
-		mutex_unlock(&lock);
 		return 2; // error acquiring command
 	}
 
@@ -338,7 +354,6 @@ ssize_t write_proc(struct file *filp, const char *buf, size_t count, loff_t *off
 	if (ret != 0)
 	{
 		printk("%s: error acquiring command\n", MODNAME);
-		mutex_unlock(&lock);
 		return 2; // error acquiring command
 	}
 
@@ -362,17 +377,13 @@ ssize_t write_proc(struct file *filp, const char *buf, size_t count, loff_t *off
 
 	if ((first_word == NULL || second_word == NULL) || (third_word == NULL && strncmp(second_word, UNINSTALL, strlen(UNINSTALL)) != 0))
 	{
-		mutex_unlock(&lock);
 		printk("%s: badly formatted input. Try: password command \"parameter\"\n", MODNAME);
 		return 2; // error acquiring command
 	}
 
-	mutex_lock(&lock);
-
 	if (check_password(first_word) != 1)
 	{
 		printk("%s: Wrong password.\n", MODNAME);
-		mutex_unlock(&lock);
 		return 3; // wrong password
 	}
 
@@ -394,49 +405,55 @@ ssize_t write_proc(struct file *filp, const char *buf, size_t count, loff_t *off
 	{
 		printk("%s: you chose %s.\n", MODNAME, SETSTATE);
 
-		mutex_lock(&probe_lock);
-
 		// parse new state
 		if (strcmp(third_word, "OFF") == 0)
 		{
+			mutext_lock(&state);
 			current_state = OFF;
 			state_char = "OFF";
+			mutext_unlock(&state);
 		}
 		else if (strcmp(third_word, "ON") == 0)
 		{
+			mutext_lock(&state);
 			current_state = ON;
 			state_char = "ON";
+			mutext_unlock(&state);
 		}
 		else if (strcmp(third_word, "REC_OFF") == 0)
 		{
+			mutext_lock(&state);
 			current_state = REC_OFF;
 			state_char = "REC_OFF";
+			mutext_unlock(&state);
 		}
 		else if (strcmp(third_word, "REC_ON") == 0)
 		{
+			mutext_lock(&state);
 			current_state = REC_ON;
 			state_char = "REC_ON";
+			mutext_unlock(&state);
 		}
 		else
 		{
 			printk("%s: invalid state\n", MODNAME);
-			mutex_unlock(&probe_lock);
 			ret = 4; // invalid parameter
 			goto end_write;
 		}
-
-		mutex_unlock(&probe_lock);
 	}
 	else if (strcmp(second_word, ADDPATH) == 0)
 	{
 		printk("%s: you chose %s.\n", MODNAME, ADDPATH);
 
+		mutext_lock(&state);
 		if (current_state == OFF || current_state == ON)
 		{
+			mutext_unlock(&state);
 			printk("%s: the module is not in a reconfigurable state.\n", MODNAME);
 			ret = 5; // module not in a reconfigurable state
 			goto end_write;
 		}
+		mutext_unlock(&state);
 
 		struct path path;
 		int isDir = 0;
@@ -453,24 +470,23 @@ ssize_t write_proc(struct file *filp, const char *buf, size_t count, loff_t *off
 			isDir = 1;
 		}
 
-		mutex_lock(&probe_lock);
 		add_protected_path(third_word, isDir);
-		mutex_unlock(&probe_lock);
 	}
 	else if (strcmp(second_word, REMOVEPATH) == 0)
 	{
 		printk("%s: you chose %s.\n", MODNAME, REMOVEPATH);
 
+		mutext_lock(&state);
 		if (current_state == OFF || current_state == ON)
 		{
+			mutext_unlock(&state);
 			printk("%s: the module is not in a reconfigurable state.\n", MODNAME);
 			ret = 5; // module not in a reconfigurable state
 			goto end_write;
 		}
+		mutext_unlock(&state);
 
-		mutex_lock(&probe_lock);
 		free_protected_path(third_word);
-		mutex_unlock(&probe_lock);
 	}
 	else if (strncmp(second_word, UNINSTALL, strlen(UNINSTALL)) == 0)
 	{
@@ -493,24 +509,23 @@ ssize_t write_proc(struct file *filp, const char *buf, size_t count, loff_t *off
 	}
 
 end_write:
-
-	mutex_unlock(&lock);
 	return ret;
 }
 
 ssize_t read_protected(struct file *filp, char *buf, size_t count, loff_t *offp)
 {
 
-	if (head == NULL)
+	mutex_lock(&protected_paths);
+	if (head == NULL){
+		mutex_unlock(&protected_paths);
 		return 0;
+	}
 
 	struct path_node *curr = head;
 	char *kbuf;
 	ssize_t len = 0; // file size
 	size_t offset = 0;
 	int ret;
-
-	mutex_lock(&probe_lock);
 
 	// Calculate the total length of the data
 	while (curr)
@@ -521,7 +536,6 @@ ssize_t read_protected(struct file *filp, char *buf, size_t count, loff_t *offp)
 
 	if (*offp > len)
 	{
-		mutex_unlock(&lock);
 		return 0;
 	}
 
@@ -533,7 +547,6 @@ ssize_t read_protected(struct file *filp, char *buf, size_t count, loff_t *offp)
 	kbuf = kmalloc(len, GFP_KERNEL);
 	if (!kbuf)
 	{
-		mutex_unlock(&probe_lock);
 		return -ENOMEM;
 	}
 
@@ -544,10 +557,10 @@ ssize_t read_protected(struct file *filp, char *buf, size_t count, loff_t *offp)
 		curr = curr->next;
 	}
 
+	mutex_unlock(&protected_paths);
 	ret = copy_to_user(buf, kbuf, count);
 	*offp += (count - ret);
 
-	mutex_unlock(&probe_lock);
 	kfree(kbuf);
 
 	return count - ret;
@@ -684,20 +697,20 @@ defer_out:
 int isPathProtected(const char *filename)
 {
 
-	mutex_lock(&probe_lock);
+	mutex_lock(&protected_paths);
 	struct path_node *curr = head;
 
 	while (curr != NULL)
 	{
 		if (strcmp(filename, curr->path) == 0 || (curr->isDir == 1 && strncmp(filename, curr->path, strlen(curr->path)) == 0))
 		{
-			mutex_unlock(&probe_lock);
+			mutex_unlock(&protected_paths);
 			return 1;
 		}
 		curr = curr->next;
 	}
 
-	mutex_unlock(&probe_lock);
+	mutex_unlock(&protected_paths);
 	return 0;
 }
 
@@ -752,9 +765,21 @@ static int openat_pre_handler(struct kretprobe_instance *ri, struct pt_regs *the
 	int flags = (int)regs->dx;
 	unsigned int accessMode = flags & O_ACCMODE;
 
-	if (current_state == OFF || current_state == REC_OFF)
+	mutext_lock(&state);
+	if (current_state == OFF || current_state == REC_OFF){
+		mutext_unlock(&state);
 		goto openat_out;
-	if (accessMode == O_RDONLY || head == NULL)
+	}
+	mutext_unlock(&state);
+		
+	mutex_lock(&protected_paths);
+	if (head == NULL){
+		mutex_unlock(&protected_paths);
+		goto openat_out;
+	}
+	mutex_unlock(&protected_paths);
+		
+	if (accessMode == O_RDONLY)
 		goto openat_out;
 
 	char *kernel_filename;
@@ -820,8 +845,20 @@ static int di_pathname_pre_handler(struct kretprobe_instance *ri, struct pt_regs
 	// asmlinkage long sys_rename(const char __user *oldname, const char __user *newname);
 	const char __user *filename = (const char __user *)regs->di;
 
-	if (current_state == OFF || current_state == REC_OFF || head == NULL)
+	mutext_lock(&state);
+	if (current_state == OFF || current_state == REC_OFF){
+		mutext_unlock(&state);
 		goto dipath_out;
+	}
+	mutext_unlock(&state);
+
+	mutex_lock(&protected_paths);
+	if (head == NULL){
+		mutex_unlock(&protected_paths);
+		goto dipath_out;
+	}
+	mutex_unlock(&protected_paths);
+		
 
 	char *kernel_filename;
 
