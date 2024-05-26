@@ -7,6 +7,8 @@
 #define CURRSTATE "currstate"
 #define LISTPROTECTED "listprotected"
 #define LISTPROTECTED_FILE "/proc/rm_protected"
+#define LOG "log"
+#define LOG_FILE "/mnt/mountfs/logfile"
 
 void print_file(char* filepath){
     FILE *file = fopen(filepath, "r");
@@ -47,6 +49,7 @@ int main() {
     printf("\tpassw uninstall\n");
     printf("\tcurrstate\n");
     printf("\tlistprotected\n");
+    printf("\tlog\n");
     
     printf("You can only add or remove paths in REC_OFF or REC_ON state.\n");
     printf("You can add or remove directories but be sure they end in \"/\".\n");
@@ -67,6 +70,12 @@ int main() {
                 
         if (strcmp(userInput, LISTPROTECTED) == 0) {
             print_file(LISTPROTECTED_FILE);
+            printf("\n");
+            continue;
+        }
+
+        if (strcmp(userInput, LOG) == 0) {
+            print_file(LOG_FILE);
             printf("\n");
             continue;
         }
