@@ -19,9 +19,10 @@ DEFINE_MUTEX(loglock);
 ssize_t logfilefs_read(struct file *filp, char __user *buf, size_t len, loff_t *off)
 {
 
-    mutex_lock(&loglock);
+    
     struct buffer_head *bh = NULL;
     struct inode *the_inode = filp->f_inode;
+    mutex_lock(&loglock);
     uint64_t file_size = the_inode->i_size;
     int ret;
     loff_t offset;
@@ -68,9 +69,10 @@ ssize_t logfilefs_read(struct file *filp, char __user *buf, size_t len, loff_t *
 ssize_t logfilefs_append(struct file *filp, const char *buf, size_t len, loff_t *off)
 {
 
-    mutex_lock(&loglock);
+    
     struct buffer_head *bh = NULL;
     struct inode *the_inode = filp->f_inode;
+    mutex_lock(&loglock);
     uint64_t file_size = the_inode->i_size;
     int ret;
     loff_t offset;
