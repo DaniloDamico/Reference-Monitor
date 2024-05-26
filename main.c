@@ -79,12 +79,13 @@ module_param(state_char, charp, S_IRUGO);
 struct path_node
 {
 	char *path;
+	int isDir;
 	struct path_node *next;
 };
 
 struct path_node *head = NULL;
 
-void add_protected_path(const char *path)
+void add_protected_path(const char *path, int isDir)
 {
 	struct path_node *new_node = kmalloc(sizeof(struct path_node), GFP_KERNEL);
 	if (!new_node)
@@ -97,6 +98,8 @@ void add_protected_path(const char *path)
 		return;
 	}
 	strcpy(new_node->path, path);
+
+	new_node->isDir = isDir;
 
 	if (head == NULL)
 	{
@@ -436,6 +439,7 @@ ssize_t write_proc(struct file *filp, const char *buf, size_t count, loff_t *off
 		}
 
 		struct path path;
+		int isDir = 0;
 		int err = kern_path(third_word, LOOKUP_FOLLOW, &path);
 		if (err != 0)
 		{
@@ -444,8 +448,12 @@ ssize_t write_proc(struct file *filp, const char *buf, size_t count, loff_t *off
 			goto end_write;
 		}
 
+		if (S_ISDIR(path.dentry->d_inode->i_mode)) {
+        	isDir = 1;
+    	}
+
 		mutex_lock(&probe_lock);
-		add_protected_path(third_word);
+		add_protected_path(third_word, isDir);
 		mutex_unlock(&probe_lock);
 	}
 	else if (strcmp(second_word, REMOVEPATH) == 0)
@@ -696,7 +704,7 @@ int isPathProtected(const char *filename)
 
 	while (curr != NULL)
 	{
-		if (strcmp(filename, curr->path) == 0 || (curr->path[strlen(curr->path) - 1] == '/' && strncmp(filename, curr->path, strlen(curr->path)) == 0))
+		if (strcmp(filename, curr->path) == 0 || (curr->isDir == 1 && strncmp(filename, curr->path, strlen(curr->path)) == 0))
 		{
 			mutex_unlock(&probe_lock);
 			return 1;

@@ -58,7 +58,6 @@ int main()
     printf("\tlog\n");
 
     printf("You can only add or remove paths in REC_OFF or REC_ON state.\n");
-    printf("You can add or remove directories but be sure they end in \"/\".\n");
     printf("Uninstall removes the reference count the module calls to prevent rmmod from working.\n");
     printf("\n");
 

@@ -8,3 +8,4 @@ logfilefs/mklogfs
 *.ko
 *.mod
 user/usercode
+reference_monitor.mod.c
