@@ -90,10 +90,11 @@ ssize_t read_protected(struct file *filp, char *buf, size_t count, loff_t *offp)
 void free_all_paths(void);
 
 // kretprobes
-extern struct kretprobe openat_retprobe;
+extern struct kprobe open_probe;
 extern struct kretprobe unlink_retprobe;
 extern struct kretprobe rmdir_retprobe;
 extern struct kretprobe mkdir_retprobe;
 extern struct kretprobe rename_retprobe;
+extern struct kretprobe create_retprobe;
 
 #endif // KRETPROBES_H

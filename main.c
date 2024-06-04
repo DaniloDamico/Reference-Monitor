@@ -55,10 +55,10 @@ int init_module(void)
 	proc_create_data(CONFIG_FILE, 0, NULL, &proc_fops, NULL);
 	proc_create_data(PROTECTED_LIST_FILE, 0, NULL, &protected_fops, NULL);
 
-	ret = register_kretprobe(&openat_retprobe);
+	ret = register_kprobe(&open_probe);
 	if (ret < 0)
 	{
-		printk(KERN_ERR "%s: failure during openat kretprobe registration\n", MODNAME);
+		printk(KERN_ERR "%s: failure during open kprobe registration\n", MODNAME);
 		goto module_out;
 	}
 
@@ -90,7 +90,12 @@ int init_module(void)
 		goto module_rmdir_out;
 	}
 
-	printk("%s: module correctly loaded\n", MODNAME);
+	ret = register_kretprobe(&create_retprobe);
+	if (ret < 0)
+	{
+		printk(KERN_ERR "%s: failure during create kretprobe registration\n", MODNAME);
+		goto module_rename_out;
+	}
 
 	ret = register_filesystem(&logfilefs_type);
 	if (likely(ret == 0))
@@ -101,6 +106,8 @@ int init_module(void)
 
 	printk("%s: failed to register %s - error %d", MODNAME, FILESYSTEM_NAME, ret);
 
+	unregister_kretprobe(&create_retprobe);
+module_rename_out:
 	unregister_kretprobe(&rename_retprobe);
 module_rmdir_out:
 	unregister_kretprobe(&rmdir_retprobe);
@@ -109,7 +116,7 @@ module_mkdir_out:
 module_unlink_out:
 	unregister_kretprobe(&unlink_retprobe);
 module_openat_out:
-	unregister_kretprobe(&openat_retprobe);
+	unregister_kprobe(&open_probe);
 module_out:
 	return ret;
 }
@@ -117,11 +124,12 @@ module_out:
 void cleanup_module(void)
 {
 	flush_scheduled_work();
-	unregister_kretprobe(&openat_retprobe);
+	unregister_kprobe(&open_probe);
 	unregister_kretprobe(&unlink_retprobe);
 	unregister_kretprobe(&mkdir_retprobe);
 	unregister_kretprobe(&rmdir_retprobe);
 	unregister_kretprobe(&rename_retprobe);
+	unregister_kretprobe(&create_retprobe);
 
 	printk("%s: module unloaded\n", MODNAME);
 

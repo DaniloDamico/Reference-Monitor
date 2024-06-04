@@ -536,20 +536,27 @@ static int kretprobe_handler(struct kretprobe_instance *ri, struct pt_regs *the_
     return 0;
 }
 
-static int openat_pre_handler(struct kretprobe_instance *ri, struct pt_regs *the_regs)
+static int open_pre_handler(struct kprobe *ri, struct pt_regs *regs)
 {
-    struct pt_regs *regs = (struct pt_regs *)the_regs->di;
+    char *buf = kmalloc(PATH_MAX, GFP_KERNEL);
+    if (!buf)
+        return 0;
 
-    // asmlinkage long sys_openat(int dfd, const char __user *filename, int flags, umode_t mode);
-    const char __user *filename = (const char __user *)regs->si;
-    int flags = (int)regs->dx;
-    unsigned int accessMode = flags & O_ACCMODE;
+    // int vfs_open(const struct path *path, struct file *file)
+    const struct path *path = (const struct path *) regs->di;
+    char *fullpath = d_path(path, buf, PATH_MAX);
+    if (IS_ERR(fullpath))
+        goto open_buf_out;
 
+    struct file *file = (struct file *)regs->si;
+    int flags = (int)file->f_flags;
+    unsigned int accessMode = flags & O_ACCMODE;  
+        
     mutex_lock(&state);
     if (current_state == OFF || current_state == REC_OFF)
     {
         mutex_unlock(&state);
-        goto openat_out;
+        goto open_buf_out;
     }
     mutex_unlock(&state);
 
@@ -557,81 +564,63 @@ static int openat_pre_handler(struct kretprobe_instance *ri, struct pt_regs *the
     if (head == NULL)
     {
         mutex_unlock(&protected_paths);
-        goto openat_out;
+        goto open_buf_out;
     }
     mutex_unlock(&protected_paths);
 
     if (accessMode == O_RDONLY)
-        goto openat_out;
+        goto open_buf_out;
 
-    char *kernel_filename;
-
-    // Allocate memory for kernel space filename
-    kernel_filename = kmalloc(PATH_MAX, GFP_KERNEL);
-    if (!kernel_filename)
+    if (isPathProtected(fullpath) == 1)
     {
-        printk(KERN_ERR "Memory allocation for kernel_filename failed\n");
-        goto openat_kfree_out;
-    }
-
-    // Copy the filename from user space to kernel space
-    if (copy_from_user(kernel_filename, filename, PATH_MAX))
-        goto openat_kfree_out;
-
-    if (kernel_filename[0] != '/')
-    {
-        struct file *file = fget(regs->di);
-        if (!file)
-            goto openat_kfree_out;
-
-        char *buffer = kmalloc(PATH_MAX, GFP_KERNEL);
-        char *path = d_path(&file->f_path, buffer, PATH_MAX);
-
-        char *concatenated_path = kmalloc(PATH_MAX, GFP_KERNEL);
-        if (!concatenated_path)
-        {
-            printk(KERN_ERR "Memory allocation for concatenated_path failed\n");
-            kfree(buffer);
-            goto openat_kfree_out;
-        }
-
-        snprintf(concatenated_path, PATH_MAX, "%s/%s", path, kernel_filename);
-
-        strncpy(kernel_filename, concatenated_path, PATH_MAX - 1);
-        kernel_filename[PATH_MAX - 1] = '\0';
-
-        kfree(concatenated_path);
-        kfree(buffer);
-    }
-
-    if (isPathProtected(kernel_filename) == 1)
-    {
-        initializeDeferredWork(kernel_filename);
-        regs->si = "";
+        ((struct file *)regs->si)->f_flags = (file->f_flags & ~O_ACCMODE) | O_RDONLY;
+        initializeDeferredWork(fullpath);
         return 0;
     }
 
-openat_kfree_out:
-    kfree(kernel_filename);
-openat_out:
-    return 1;
+open_buf_out:
+    kfree(buf);
+    return 0;
+    
 }
 
-static int di_pathname_pre_handler(struct kretprobe_instance *ri, struct pt_regs *the_regs)
+static int si_dentry_pre_handler(struct kretprobe_instance *ri, struct pt_regs *regs)
 {
-    struct pt_regs *regs = (struct pt_regs *)the_regs->di;
+    // int security_path_rmdir(const struct path *dir, struct dentry *dentry);
+    // int security_path_unlink(const struct path *dir, struct dentry *dentry);
+    // int security_path_mkdir(const struct path *dir, struct dentry *dentry, umode_t mode);
+    // int security_path_rmdir(const struct path *dir, struct dentry *dentry);
+    // int security_path_rename(const struct path *old_dir, struct dentry *old_dentry, const struct path *new_dir, struct dentry *new_dentry, unsigned int flags);
+    // int security_path_symlink(const struct path *dir, struct dentry *dentry, const char *old_name);
 
-    // asmlinkage long sys_unlink(const char __user *pathname);
-    // asmlinkage long sys_rmdir(const char __user *pathname);
-    // asmlinkage long sys_mkdir(const char __user *pathname, umode_t mode);
-    // asmlinkage long sys_rename(const char __user *oldname, const char __user *newname);
-    const char __user *filename = (const char __user *)regs->di;
+    const struct path *pathstruct = regs->di;
+    if (!pathstruct)
+        return 1;
+
+    struct dentry *dentry = (struct dentry *) regs->si;
+    if (!dentry)
+        return 1;
+
+    char *fullpath = kmalloc(PATH_MAX, GFP_KERNEL);
+    if (!fullpath)
+        return 1;
+
+    char *path_buffer = kmalloc(PATH_MAX, GFP_KERNEL);
+    char *path = d_path(pathstruct, path_buffer, PATH_MAX);
+    if (IS_ERR(path)){
+        goto dentry_out;
+    }
+    
+    char *dentry_name = dentry->d_name.name;
+
+    snprintf(fullpath, PATH_MAX, "%s/%s", path, dentry_name);
+    kfree(path_buffer);
 
     mutex_lock(&state);
     if (current_state == OFF || current_state == REC_OFF)
     {
         mutex_unlock(&state);
-        goto dipath_out;
+        goto dentry_out;
     }
     mutex_unlock(&state);
 
@@ -639,63 +628,91 @@ static int di_pathname_pre_handler(struct kretprobe_instance *ri, struct pt_regs
     if (head == NULL)
     {
         mutex_unlock(&protected_paths);
-        goto dipath_out;
+        goto dentry_out;
     }
     mutex_unlock(&protected_paths);
 
-    char *kernel_filename;
-
-    // Allocate memory for kernel space filename
-    kernel_filename = kmalloc(PATH_MAX, GFP_KERNEL);
-    if (!kernel_filename)
+    if (isPathProtected(fullpath) == 1)
     {
-        printk(KERN_ERR "Memory allocation for kernel_filename failed\n");
-        goto dipath_out;
-    }
-
-    // Copy the filename from user space to kernel space
-    if (copy_from_user(kernel_filename, filename, PATH_MAX))
-        goto dipath_kfree_out;
-
-    if (isPathProtected(kernel_filename) == 1)
-    {
-        initializeDeferredWork(kernel_filename);
-        regs->di = "";
+        initializeDeferredWork(fullpath);
         return 0;
     }
 
-dipath_kfree_out:
-    kfree(kernel_filename);
-dipath_out:
+dentry_out:
+    kfree(fullpath);
     return 1;
 }
 
-struct kretprobe openat_retprobe = {
-    .kp.symbol_name = "__x64_sys_openat", // (ver 4.17 introduced syscall wrappers)
-    .handler = kretprobe_handler,
-    .entry_handler = openat_pre_handler,
-    .maxactive = -1};
+static int create_pre_handler(struct kretprobe_instance *ri, struct pt_regs *regs)
+{
+    // int security_inode_create(struct inode *dir, struct dentry *dentry, umode_t mode)
+    struct dentry *dentry = (struct dentry *) regs->si;
+    if (!dentry)
+        return 1;
+
+    char *dentry_buffer = kmalloc(PATH_MAX, GFP_KERNEL);
+    char *fullpath = dentry_path_raw(dentry, dentry_buffer, PATH_MAX);
+    if (IS_ERR(fullpath)){
+        goto create_out;
+    }
+    
+    mutex_lock(&state);
+    if (current_state == OFF || current_state == REC_OFF)
+    {
+        mutex_unlock(&state);
+        goto create_out;
+    }
+    mutex_unlock(&state);
+
+    mutex_lock(&protected_paths);
+    if (head == NULL)
+    {
+        mutex_unlock(&protected_paths);
+        goto create_out;
+    }
+    mutex_unlock(&protected_paths);
+
+    if (isPathProtected(fullpath) == 1)
+    {
+        initializeDeferredWork(fullpath);
+        return 0;
+    }
+    
+create_out:
+    kfree(dentry_buffer);
+    return 1;
+}
+
+struct kprobe open_probe = {
+    .symbol_name = "vfs_open",
+    .pre_handler = open_pre_handler,};
 
 struct kretprobe unlink_retprobe = {
-    .kp.symbol_name = "__x64_sys_unlink",
+    .kp.symbol_name = "security_path_unlink",
     .handler = kretprobe_handler,
-    .entry_handler = di_pathname_pre_handler,
+    .entry_handler = si_dentry_pre_handler,
     .maxactive = -1};
 
 struct kretprobe rmdir_retprobe = {
-    .kp.symbol_name = "__x64_sys_rmdir",
+    .kp.symbol_name = "security_path_rmdir",
     .handler = kretprobe_handler,
-    .entry_handler = di_pathname_pre_handler,
+    .entry_handler = si_dentry_pre_handler,
     .maxactive = -1};
 
 struct kretprobe mkdir_retprobe = {
-    .kp.symbol_name = "__x64_sys_mkdir",
+    .kp.symbol_name = "security_path_mkdir",
     .handler = kretprobe_handler,
-    .entry_handler = di_pathname_pre_handler,
+    .entry_handler = si_dentry_pre_handler,
     .maxactive = -1};
 
 struct kretprobe rename_retprobe = {
-    .kp.symbol_name = "__x64_sys_rename",
+    .kp.symbol_name = "security_path_rename",
     .handler = kretprobe_handler,
-    .entry_handler = di_pathname_pre_handler,
+    .entry_handler = si_dentry_pre_handler,
+    .maxactive = -1};
+
+struct kretprobe create_retprobe = {
+    .kp.symbol_name = "security_inode_create",
+    .handler = kretprobe_handler,
+    .entry_handler = create_pre_handler,
     .maxactive = -1};
