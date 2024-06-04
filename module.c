@@ -128,8 +128,7 @@ ssize_t write_proc(struct file *filp, const char *buf, size_t count, loff_t *off
     {
         if (strcmp(second_word, LOCK) != 0 && strcmp(second_word, UNLOCK) != 0)
         {
-            strsep(&data_pointer, "\"");
-            third_word = strsep(&data_pointer, "\"");
+            third_word = data_pointer;
         }
     }
 

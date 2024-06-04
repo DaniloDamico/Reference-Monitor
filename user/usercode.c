@@ -19,10 +19,10 @@ void help(){
     printf("use this program to communicate with the Reference Monitor\n");
     printf("the default password is \"passw\" and will be used in the following examples\n");
     printf("Commands:\n");
-    printf("\tpassw changepassw \"newpassw\"\n");
-    printf("\tpassw setstate \"REC_ON\"\n");
-    printf("\tpassw addpath \"/absolute/path\"\n");
-    printf("\tpassw removepath \"/absolute/path\"\n");
+    printf("\tpassw changepassw newpassw\n");
+    printf("\tpassw setstate REC_ON\n");
+    printf("\tpassw addpath /absolute/path\n");
+    printf("\tpassw removepath /absolute/path\n");
 
     printf("\nCommands to allow module removal:\n");
     printf("\tpassw lock\n");
