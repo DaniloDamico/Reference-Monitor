@@ -535,11 +535,11 @@ static int kretprobe_handler(struct kretprobe_instance *ri, struct pt_regs *the_
     return 0;
 }
 
-static int open_pre_handler(struct kprobe *ri, struct pt_regs *regs)
+static int open_pre_handler(struct kretprobe_instance *ri, struct pt_regs *regs)
 {
     char *buf = kmalloc(PATH_MAX, GFP_KERNEL);
     if (!buf)
-        return 0;
+        return 1;
 
     // int vfs_open(const struct path *path, struct file *file)
     const struct path *path = (const struct path *) regs->di;
@@ -572,14 +572,15 @@ static int open_pre_handler(struct kprobe *ri, struct pt_regs *regs)
 
     if (isPathProtected(fullpath) == 1)
     {
-        ((struct file *)regs->si)->f_flags = (file->f_flags & ~O_ACCMODE) | O_RDONLY;
+        printk("ci sono\n");
+        ((struct file *)regs->si)->f_flags = O_RDONLY;
         initializeDeferredWork(fullpath);
         return 0;
     }
 
 open_buf_out:
     kfree(buf);
-    return 0;
+    return 1;
     
 }
 
@@ -682,9 +683,11 @@ create_out:
     return 1;
 }
 
-struct kprobe open_probe = {
-    .symbol_name = "vfs_open",
-    .pre_handler = open_pre_handler,};
+struct kretprobe open_retprobe = {
+    .kp.symbol_name = "vfs_open",
+    .handler = kretprobe_handler,
+    .entry_handler = open_pre_handler,
+    .maxactive = -1};
 
 struct kretprobe unlink_retprobe = {
     .kp.symbol_name = "security_path_unlink",

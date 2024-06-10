@@ -55,7 +55,7 @@ int init_module(void)
 	proc_create_data(CONFIG_FILE, 0, NULL, &proc_fops, NULL);
 	proc_create_data(PROTECTED_LIST_FILE, 0, NULL, &protected_fops, NULL);
 
-	ret = register_kprobe(&open_probe);
+	ret = register_kretprobe(&open_retprobe);
 	if (ret < 0)
 	{
 		printk(KERN_ERR "%s: failure during open kprobe registration\n", MODNAME);
@@ -116,7 +116,7 @@ module_mkdir_out:
 module_unlink_out:
 	unregister_kretprobe(&unlink_retprobe);
 module_openat_out:
-	unregister_kprobe(&open_probe);
+	unregister_kretprobe(&open_retprobe);
 module_out:
 	return ret;
 }
@@ -124,7 +124,7 @@ module_out:
 void cleanup_module(void)
 {
 	flush_scheduled_work();
-	unregister_kprobe(&open_probe);
+	unregister_kretprobe(&open_retprobe);
 	unregister_kretprobe(&unlink_retprobe);
 	unregister_kretprobe(&mkdir_retprobe);
 	unregister_kretprobe(&rmdir_retprobe);
